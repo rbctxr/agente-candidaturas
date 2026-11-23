@@ -73,11 +73,11 @@ def greenhouse(board_token, track="global_entry"):
         location = (job.get("location") or {}).get("name", "")
         description = clean(job.get("content"))
 
-        result.append(
-            Opportunity(
+        try:
+            opportunity = Opportunity(
                 title=job.get("title") or "",
                 company=board_token,
-                url=job["absolute_url"],
+                url=job.get("absolute_url") or "",
                 description=description,
                 location=location,
                 source="greenhouse",
@@ -88,7 +88,11 @@ def greenhouse(board_token, track="global_entry"):
                     description,
                 ),
             )
-        )
+        except ValueError:
+            # Ignora a vaga inválida e continua a coleta.
+            continue
+
+        result.append(opportunity)
 
     return result
 
@@ -114,11 +118,11 @@ def lever(company_slug, track="global_entry"):
         workplace_type = job.get("workplaceType") or ""
         commitment = categories.get("commitment") or ""
 
-        result.append(
-            Opportunity(
+        try:
+            opportunity = Opportunity(
                 title=job.get("text") or "",
                 company=company_slug,
-                url=job["hostedUrl"],
+                url=job.get("hostedUrl") or "",
                 description=description,
                 location=location,
                 source="lever",
@@ -131,7 +135,11 @@ def lever(company_slug, track="global_entry"):
                     commitment,
                 ),
             )
-        )
+        except ValueError:
+            # Ignora a vaga inválida e continua a coleta.
+            continue
+
+        result.append(opportunity)
 
     return result
 
