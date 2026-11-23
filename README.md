@@ -1,4 +1,4 @@
-# agente de candidaturas — piloto supervisionado v0.3
+﻿# agente de candidaturas — piloto supervisionado v0.3
 
 três trilhas: `br_internship`, `global_entry`, `global_freelance`. o agente pesquisa e prepara; **não envia candidaturas automaticamente nesta versão**.
 
@@ -16,6 +16,7 @@ python -m venv .venv
 # windows: .venv\Scripts\activate
 pip install -e '.[dev]'
 cp .env.example .env  # windows: copy .env.example .env
+mkdir data  # crie a pasta se ainda não existir
 cp profile.example.json data/profile.json
 python run.py
 pytest -q

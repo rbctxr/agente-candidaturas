@@ -44,7 +44,7 @@ profile_file = Path("data/profile.json")
 
 if not profile_file.exists():
     st.warning(
-        "revise data/profile.example.json e salve uma cópia "
+        "revise profile.example.json e salve uma cópia "
         "como data/profile.json antes de analisar vagas."
     )
 
