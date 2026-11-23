@@ -1,0 +1,25 @@
+
+# Credenciais e configurações privadas
+.env
+.env.*
+!.env.example
+
+# Ambiente virtual
+.venv/
+venv/
+
+# Cache e arquivos gerados pelo Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Dados pessoais e bancos locais
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Configurações e arquivos temporários
+.vscode/
+.DS_Store
