@@ -29,9 +29,14 @@ def get_json(url, timeout=15):
     return response.json()
 
 
-def is_remote(*values):
-    """Identifica indicação explícita de trabalho remoto."""
-    text = " ".join(str(value or "") for value in values).casefold()
+def is_remote(
+    title="",
+    location="",
+    description="",
+    workplace_type="",
+    commitment="",
+):
+    """Identifica trabalho remoto por ordem de prioridade."""
 
     remote_patterns = (
         r"\bremote\b",
@@ -39,23 +44,56 @@ def is_remote(*values):
         r"\bremota\b",
         r"\bwork from home\b",
         r"\bfully distributed\b",
-        r"\b100%\s*(?:remote|remoto|remota)\b",
     )
 
     non_remote_patterns = (
         r"\bhybrid\b",
         r"\bhíbrido\b",
         r"\bhibrido\b",
-        r"\bon[- ]site\b",
+        r"\bhíbrida\b",
+        r"\bhibrida\b",
+        r"\bon[- ]?site\b",
         r"\bpresencial\b",
+        r"\boffice[- ]based\b",
+        r"\bin[- ]office\b",
         r"\bnot remote\b",
         r"\bno remote\b",
+        r"\bnão remot[oa]\b",
+        r"\bnao remot[oa]\b",
     )
 
-    if any(re.search(pattern, text) for pattern in non_remote_patterns):
-        return False
+    def classify(value):
+        text = str(value or "").casefold()
 
-    return any(re.search(pattern, text) for pattern in remote_patterns)
+        if any(
+            re.search(pattern, text)
+            for pattern in non_remote_patterns
+        ):
+            return False
+
+        if any(
+            re.search(pattern, text)
+            for pattern in remote_patterns
+        ):
+            return True
+
+        return None
+
+    # Prioriza informações específicas sobre a modalidade.
+    for value in (
+        workplace_type,
+        location,
+        title,
+        commitment,
+        description,
+    ):
+        result = classify(value)
+
+        if result is not None:
+            return result
+
+    # Sem evidência suficiente, não considera a vaga remota.
+    return False
 
 
 def greenhouse(board_token, track="global_entry"):
@@ -83,9 +121,9 @@ def greenhouse(board_token, track="global_entry"):
                 source="greenhouse",
                 track=track,
                 remote=is_remote(
-                    job.get("title"),
-                    location,
-                    description,
+                    title=job.get("title"),
+                    location=location,
+                    description=description,
                 ),
             )
         except ValueError:
@@ -128,11 +166,11 @@ def lever(company_slug, track="global_entry"):
                 source="lever",
                 track=track,
                 remote=is_remote(
-                    job.get("text"),
-                    location,
-                    description,
-                    workplace_type,
-                    commitment,
+                    title=job.get("text"),
+                    location=location,
+                    description=description,
+                    workplace_type=workplace_type,
+                    commitment=commitment,
                 ),
             )
         except ValueError:
