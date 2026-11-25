@@ -2,6 +2,7 @@
 import sqlite3
 from pathlib import Path
 
+
 STATUSES = {
     "nova",
     "para_revisao",
@@ -33,6 +34,8 @@ def connect(path="data/global_jobs.db"):
             budget TEXT,
             eligibility TEXT,
             eligibility_reason TEXT,
+            eligibility_confirmed INTEGER NOT NULL DEFAULT 0
+                CHECK (eligibility_confirmed IN (0, 1)),
             score INTEGER,
             analysis TEXT,
             draft TEXT,
@@ -41,6 +44,22 @@ def connect(path="data/global_jobs.db"):
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # migração de bancos de dados existentes
+    columns = {
+        row["name"]
+        for row in conn.execute(
+            "PRAGMA table_info(opportunities)"
+        )
+    }
+
+    if "eligibility_confirmed" not in columns:
+        conn.execute("""
+            ALTER TABLE opportunities
+            ADD COLUMN eligibility_confirmed
+            INTEGER NOT NULL DEFAULT 0
+            CHECK (eligibility_confirmed IN (0, 1))
+        """)
 
     conn.commit()
     return conn
@@ -79,6 +98,48 @@ def all_jobs(conn, track=None):
     return conn.execute(
         "SELECT * FROM opportunities ORDER BY created_at DESC"
     ).fetchall()
+
+
+def confirm_eligibility(conn, id):
+    """Registra a confirmação humana de elegibilidade."""
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        row = conn.execute("""
+            SELECT eligibility, status
+            FROM opportunities
+            WHERE id=?
+        """, (id,)).fetchone()
+
+        if row is None:
+            raise ValueError("Vaga inexistente")
+
+        if row["eligibility"] not in ("candidate", "review"):
+            raise ValueError(
+                "A elegibilidade desta vaga não pode ser confirmada"
+            )
+
+        if row["status"] not in (
+            "nova",
+            "para_revisao",
+            "aprovada",
+        ):
+            raise ValueError(
+                "A etapa atual não permite confirmar elegibilidade"
+            )
+
+        conn.execute("""
+            UPDATE opportunities
+            SET eligibility_confirmed=1
+            WHERE id=?
+        """, (id,))
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def save_analysis(conn, id, result):
@@ -127,16 +188,31 @@ def set_status(conn, id, status):
 
         conn.execute("BEGIN IMMEDIATE")
 
-        old = conn.execute(
-            "SELECT status FROM opportunities WHERE id=?",
-            (id,),
-        ).fetchone()
+        old = conn.execute("""
+            SELECT status, eligibility, eligibility_confirmed
+            FROM opportunities
+            WHERE id=?
+        """, (id,)).fetchone()
 
         if old is None:
             raise ValueError("Vaga inexistente")
 
         if status not in allowed[old["status"]]:
             raise ValueError("Transição não permitida")
+
+        # exige confirmação humana antes da aprovação ou envio
+        if status in ("aprovada", "enviada_manualmente"):
+
+            if old["eligibility"] not in ("candidate", "review"):
+                raise ValueError(
+                    "A oportunidade está bloqueada pela política "
+                    "de elegibilidade"
+                )
+
+            if not old["eligibility_confirmed"]:
+                raise ValueError(
+                    "Confirme a elegibilidade antes de continuar"
+                )
 
         if status == "enviada_manualmente":
             from .pilot import init
@@ -154,7 +230,9 @@ def set_status(conn, id, status):
             """, (id,)).fetchone()
 
             if existing:
-                raise ValueError("Candidatura já registrada como enviada")
+                raise ValueError(
+                    "Candidatura já registrada como enviada"
+                )
 
             conn.execute("""
                 INSERT INTO application_events (
@@ -166,10 +244,19 @@ def set_status(conn, id, status):
                 "Envio manual confirmado pela pessoa usuária",
             ))
 
-        conn.execute(
-            "UPDATE opportunities SET status=? WHERE id=?",
-            (status, id),
-        )
+        if status == "rejeitada":
+            conn.execute("""
+                UPDATE opportunities
+                SET status=?, eligibility_confirmed=0
+                WHERE id=?
+            """, (status, id))
+
+        else:
+            conn.execute("""
+                UPDATE opportunities
+                SET status=?
+                WHERE id=?
+            """, (status, id))
 
         conn.commit()
 

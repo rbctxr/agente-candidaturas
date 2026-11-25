@@ -7,7 +7,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from jobagent.models import Opportunity, TRACKS
-from jobagent.matching import evaluate
+from jobagent.policy import eligibility as check_eligibility
 from jobagent.collectors.remotive import fetch
 from jobagent.storage import (
     connect,
@@ -16,11 +16,24 @@ from jobagent.storage import (
     save_analysis,
     save_draft,
     set_status,
+    confirm_eligibility,
 )
 from jobagent.ai import analyze
 
 
-# configurações iniciais
+ELIGIBILITY_MAP = {
+    "blocked": "rejected",
+    "needs_eligibility": "review",
+    "eligible": "candidate",
+}
+
+
+def evaluate_opportunity(op):
+    """Aplica a política e preserva os status atuais do banco."""
+    status, reason = check_eligibility(op)
+    return ELIGIBILITY_MAP.get(status, "rejected"), reason
+
+
 load_dotenv()
 
 st.set_page_config(
@@ -29,13 +42,12 @@ st.set_page_config(
 )
 
 st.title("agente global de candidaturas")
+
 st.caption(
     "brasil · entry-level global · freelance global | "
     "nenhuma candidatura é enviada automaticamente"
 )
 
-
-# banco de dados e perfil
 conn = connect(
     os.getenv("DATABASE_PATH", "data/global_jobs.db")
 )
@@ -55,7 +67,6 @@ profile = (
 )
 
 
-# barra lateral
 with st.sidebar:
     st.header("fontes e perfil")
 
@@ -64,7 +75,7 @@ with st.sidebar:
             fetched = fetch()
 
             for op in fetched:
-                eligibility, reason = evaluate(op)
+                eligibility, reason = evaluate_opportunity(op)
 
                 if eligibility != "rejected":
                     upsert(conn, op, eligibility, reason)
@@ -89,7 +100,6 @@ with st.sidebar:
     )
 
 
-# cadastro manual de oportunidades
 st.subheader("adicionar oportunidade manualmente")
 
 with st.form("manual"):
@@ -122,11 +132,7 @@ with st.form("manual"):
 
     if st.form_submit_button("salvar e avaliar filtros"):
         try:
-            if (
-                not title.strip()
-                or not company.strip()
-                or not desc.strip()
-            ):
+            if not title.strip() or not company.strip() or not desc.strip():
                 raise ValueError(
                     "preencha título, empresa e descrição"
                 )
@@ -144,23 +150,19 @@ with st.form("manual"):
                 budget,
             )
 
-            eligibility, reason = evaluate(op)
+            eligibility, reason = evaluate_opportunity(op)
 
             if eligibility == "rejected":
                 st.warning(reason)
 
             else:
                 upsert(conn, op, eligibility, reason)
-
-                st.success(
-                    f"salvo como {eligibility}: {reason}"
-                )
+                st.success(f"salvo como {eligibility}: {reason}")
 
         except ValueError as exc:
             st.error(str(exc))
 
 
-# listagem de oportunidades
 st.subheader("oportunidades")
 
 rows = all_jobs(
@@ -191,54 +193,108 @@ for row in rows:
 
         st.text(j["description"][:3500])
 
-        # análise com gemini
-        if (
-            j["status"] in ("nova", "para_revisao")
-            and st.button(
-                "analisar e gerar rascunho",
-                key="an_" + j["id"],
+        # confirmação humana de elegibilidade
+
+        if j["eligibility_confirmed"]:
+            st.success(
+                "elegibilidade confirmada manualmente"
             )
+
+        elif j["status"] == "enviada_manualmente":
+            st.caption(
+                "registro histórico sem confirmação "
+                "de elegibilidade armazenada"
+            )
+
+        elif j["eligibility"] not in ("candidate", "review"):
+            st.error(
+                "oportunidade bloqueada pela política "
+                "de elegibilidade"
+            )
+
+        elif j["status"] in (
+            "nova",
+            "para_revisao",
+            "aprovada",
         ):
-            if not profile:
-                st.error(
-                    "configure o perfil factual primeiro"
-                )
+            st.warning(
+                "elegibilidade ainda não confirmada. "
+                "consulte o anúncio original."
+            )
 
-            elif not os.getenv("GEMINI_API_KEY"):
-                st.error(
-                    "configure GEMINI_API_KEY no .env"
-                )
+            checked = st.checkbox(
+                "confirmei que posso trabalhar remotamente "
+                "a partir do Brasil, atendo aos requisitos "
+                "obrigatórios e sou elegível para a "
+                "modalidade de contratação.",
+                key="elig_check_" + j["id"],
+            )
 
-            else:
+            if st.button(
+                "confirmar elegibilidade",
+                key="elig_confirm_" + j["id"],
+                disabled=not checked,
+            ):
                 try:
-                    op = Opportunity(
-                        j["title"],
-                        j["company"],
-                        j["url"],
-                        j["description"],
-                        j["location"],
-                        j["track"],
-                        j["source"],
-                        bool(j["remote"]),
-                        j["country_restrictions"],
-                        j["budget"],
-                        j["id"],
-                    )
-
-                    save_analysis(
-                        conn,
-                        j["id"],
-                        analyze(op, profile),
-                    )
-
+                    confirm_eligibility(conn, j["id"])
                     st.rerun()
 
-                except Exception as exc:
+                except ValueError as exc:
+                    st.error(str(exc))
+
+        # análise e geração de rascunho
+
+        if j["status"] in ("nova", "para_revisao"):
+
+            if st.button(
+                "analisar e gerar rascunho",
+                key="an_" + j["id"],
+                disabled=j["eligibility"] not in (
+                    "candidate",
+                    "review",
+                ),
+            ):
+                if not profile:
                     st.error(
-                        f"falha na análise: {exc}"
+                        "configure o perfil factual primeiro"
                     )
 
-        # resultado da análise
+                elif not os.getenv("GEMINI_API_KEY"):
+                    st.error(
+                        "configure GEMINI_API_KEY no .env"
+                    )
+
+                else:
+                    try:
+                        op = Opportunity(
+                            j["title"],
+                            j["company"],
+                            j["url"],
+                            j["description"],
+                            j["location"],
+                            j["track"],
+                            j["source"],
+                            bool(j["remote"]),
+                            j["country_restrictions"],
+                            j["budget"],
+                            j["id"],
+                        )
+
+                        result = analyze(op, profile)
+
+                        save_analysis(
+                            conn,
+                            j["id"],
+                            result,
+                        )
+
+                        st.rerun()
+
+                    except Exception as exc:
+                        st.error(f"falha na análise: {exc}")
+
+        # apresentação e revisão do material
+
         if j["analysis"]:
             st.metric(
                 "compatibilidade heurística",
@@ -247,70 +303,133 @@ for row in rows:
 
             st.write(j["analysis"])
 
-            # revisão manual do rascunho
-            with st.form("edit_" + j["id"]):
-                revised = st.text_area(
-                    "rascunho editável — revise fatos, "
-                    "elegibilidade e tom",
-                    value=j["draft"] or "",
-                    height=220,
-                )
-
-                if st.form_submit_button(
-                    "salvar revisão"
-                ):
-                    try:
-                        save_draft(
-                            conn,
-                            j["id"],
-                            revised,
-                        )
-
-                        st.success("revisão salva")
-
-                    except ValueError as exc:
-                        st.error(str(exc))
-
-            # aprovação ou rejeição manual
             if j["status"] == "para_revisao":
-                a, b = st.columns(2)
 
-                if a.button(
-                    "aprovar material",
-                    key="ok_" + j["id"],
-                ):
+                with st.form("edit_" + j["id"]):
+                    revised = st.text_area(
+                        "rascunho editável — revise fatos e tom",
+                        value=j["draft"] or "",
+                        height=220,
+                    )
+
+                    if st.form_submit_button("salvar revisão"):
+                        try:
+                            save_draft(
+                                conn,
+                                j["id"],
+                                revised,
+                            )
+
+                            st.success("revisão salva")
+                            st.rerun()
+
+                        except ValueError as exc:
+                            st.error(str(exc))
+
+            else:
+                st.text(j["draft"] or "")
+
+        # aprovação humana do material
+
+        if j["status"] == "para_revisao":
+
+            reviewed = st.checkbox(
+                "revisei o material e confirmei que todas "
+                "as informações são verdadeiras e "
+                "compatíveis com meu perfil.",
+                key="material_review_" + j["id"],
+            )
+
+            can_approve = (
+                bool(j["eligibility_confirmed"])
+                and j["eligibility"] in ("candidate", "review")
+                and reviewed
+                and bool(j["analysis"])
+                and bool((j["draft"] or "").strip())
+            )
+
+            a, b = st.columns(2)
+
+            if a.button(
+                "aprovar material",
+                key="ok_" + j["id"],
+                disabled=not can_approve,
+            ):
+                try:
                     set_status(
                         conn,
                         j["id"],
                         "aprovada",
                     )
+
                     st.rerun()
 
-                if b.button(
-                    "rejeitar",
-                    key="no_" + j["id"],
-                ):
+                except ValueError as exc:
+                    st.error(str(exc))
+
+            if b.button(
+                "rejeitar",
+                key="no_" + j["id"],
+            ):
+                try:
                     set_status(
                         conn,
                         j["id"],
                         "rejeitada",
                     )
+
                     st.rerun()
 
-            # registro de envio manual
-            if j["status"] == "aprovada":
+                except ValueError as exc:
+                    st.error(str(exc))
+
+        # registro de envio manual
+
+        if j["status"] == "aprovada":
+
+            if (
+                j["eligibility_confirmed"]
+                and j["eligibility"] in ("candidate", "review")
+            ):
                 st.info(
                     "material aprovado. envie manualmente "
                     "no site original; não houve envio automático."
                 )
 
-                if st.button(
-                    "marcar como enviada manualmente",
-                    key="sent_" + j["id"],
-                ):
+            else:
+                st.warning(
+                    "confirme a elegibilidade antes de "
+                    "registrar o envio."
+                )
+
+            sent = st.checkbox(
+                "confirmo que enviei esta candidatura "
+                "manualmente no site original.",
+                key="sent_check_" + j["id"],
+            )
+
+            if st.button(
+                "marcar como enviada manualmente",
+                key="sent_" + j["id"],
+                disabled=not (
+                    j["eligibility_confirmed"]
+                    and j["eligibility"] in ("candidate", "review")
+                    and sent
+                ),
+            ):
+                try:
                     set_status(
                         conn,
                         j["id"],
                         "enviada_manualmente",
                     )
+
                     st.rerun()
+
+                except ValueError as exc:
+                    st.error(str(exc))
+
+        if j["status"] == "enviada_manualmente":
+            st.success(
+                "candidatura registrada como enviada manualmente"
+            )

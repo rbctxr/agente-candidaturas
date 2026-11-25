@@ -1,10 +1,11 @@
-
-"""Verificação conservadora de elegibilidade geográfica."""
+"""Política conservadora de elegibilidade de oportunidades."""
 
 from .matching import evaluate
 
 
 def eligibility(op):
+    """Interpreta os filtros iniciais de uma oportunidade."""
+
     status, reason = evaluate(op)
 
     if status == "rejected":
@@ -13,7 +14,14 @@ def eligibility(op):
     if status == "review":
         return "needs_eligibility", reason
 
+    if status == "candidate":
+        return (
+            "eligible",
+            "Filtros iniciais atendidos; "
+            "confirmar elegibilidade no anúncio original",
+        )
+
     return (
-        "eligible",
-        "Filtros iniciais atendidos; confirmar elegibilidade no anúncio original",
+        "blocked",
+        f"Resultado de classificação desconhecido: {status}",
     )

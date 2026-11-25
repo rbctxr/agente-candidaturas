@@ -34,3 +34,48 @@ def test_geography_block():
     op=Opportunity(title='Junior Data Analyst',company='X',url='https://example.org/j2',
         description='Remote job US only SQL analytics',location='Remote',remote=True)
     assert eligibility(op)[0]=='blocked'
+
+
+def test_pilot_init_without_open_transaction(tmp_path):
+    from jobagent.storage import connect
+    from jobagent.pilot import init
+
+    conn = connect(tmp_path / "db.sqlite")
+
+    assert not conn.in_transaction
+
+    init(conn)
+
+    assert not conn.in_transaction
+
+    conn.close()
+
+
+def test_pilot_init_preserves_outer_transaction(tmp_path):
+    from jobagent.storage import connect
+    from jobagent.pilot import init
+
+    conn = connect(tmp_path / "db.sqlite")
+
+    conn.execute("BEGIN IMMEDIATE")
+
+    conn.execute("""
+        INSERT INTO opportunities (id, title)
+        VALUES ('transaction-test', 'Data Analyst')
+    """)
+
+    init(conn)
+
+    assert conn.in_transaction
+
+    conn.rollback()
+
+    row = conn.execute("""
+        SELECT id FROM opportunities
+        WHERE id='transaction-test'
+    """).fetchone()
+
+    assert row is None
+    assert not conn.in_transaction
+
+    conn.close()

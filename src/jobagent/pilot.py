@@ -25,30 +25,42 @@ VALID_STATES = {
 
 
 def init(conn):
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS application_events (
-            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            opportunity_id TEXT NOT NULL,
-            event TEXT NOT NULL,
-            note TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-    """)
+    """Inicializa o piloto sem interferir em transações externas."""
 
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS pilot_settings (
-            singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-            mode TEXT NOT NULL DEFAULT 'pilot',
-            auto_opt_in INTEGER NOT NULL DEFAULT 0
-        )
-    """)
+    conn.execute("SAVEPOINT pilot_init")
 
-    conn.execute("""
-        INSERT OR IGNORE INTO pilot_settings (
-            singleton, mode, auto_opt_in
-        )
-        VALUES (1, 'pilot', 0)
-    """)
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS application_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                opportunity_id TEXT NOT NULL,
+                event TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS pilot_settings (
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                mode TEXT NOT NULL DEFAULT 'pilot',
+                auto_opt_in INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+
+        conn.execute("""
+            INSERT OR IGNORE INTO pilot_settings (
+                singleton, mode, auto_opt_in
+            )
+            VALUES (1, 'pilot', 0)
+        """)
+
+        conn.execute("RELEASE SAVEPOINT pilot_init")
+
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT pilot_init")
+        conn.execute("RELEASE SAVEPOINT pilot_init")
+        raise
 
 
 def event(conn, opportunity_id, name, note=""):
